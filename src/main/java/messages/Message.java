@@ -1,5 +1,9 @@
 package messages;
 
+import com.google.gson.*;
+
+import java.lang.reflect.Type;
+
 public abstract class Message {
     public String type;
     public String src;
