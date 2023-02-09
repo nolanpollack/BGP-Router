@@ -27,9 +27,9 @@ public class Router {
             relations.put(neighbor, relation);
 
             Gson gson = new Gson();
-            gson.toJson(new HandshakeMessage(ourAddr(neighbor), neighbor));
+            String message = gson.toJson(new HandshakeMessage(ourAddr(neighbor), neighbor));
 
-            send(neighbor, "{ \"type\": \"handshake\", \"src\": " + ourAddr(neighbor) + ", \"dst\": " + neighbor + ", \"msg\": {} }");
+            send(neighbor, message);
         }
     }
 
@@ -76,7 +76,7 @@ public class Router {
         String[] connections = Arrays.copyOfRange(args, 1, args.length);
 
         Router router = new Router(asn, connections);
-        router.run();
+//        router.run();
     }
 
     }
