@@ -1,23 +1,26 @@
 package messages;
 
-import com.google.gson.*;
-
-import java.lang.reflect.Type;
-
 public abstract class Message {
-    public String type;
+    public enum MessageType {
+        handshake,
+        update,
+        data,
+        noRoute
+    }
+
+    private MessageType type;
     public String src;
     public String dst;
     public Object msg;
 
-    public Message(String type, String src, String dst, Object msg) {
+    public Message(MessageType type, String src, String dst, Object msg) {
         this.type = type;
         this.src = src;
         this.dst = dst;
         this.msg = msg;
     }
 
-    public String toString() {
-        return "{ \"type\": \"" + type + "\", \"src\": \"" + src + "\", \"dst\": \"" + dst + "\", \"msg\": " + msg + " }";
+    public MessageType getType() {
+        return type;
     }
 }
