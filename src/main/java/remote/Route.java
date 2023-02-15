@@ -6,13 +6,16 @@ import java.util.List;
 
 import static remote.Router.toBinary;
 
+/**
+ * Represents a route in the BGP routing table.
+ */
 public class Route {
     public String network;
     public String nextHop;
     public int netmask;
     public int localpref;
     public boolean selfOrigin;
-    List<Integer> ASPath;
+    public List<Integer> ASPath;
     public UpdateMessage.UpdateParams.Origin origin;
 
     public Route(String nextHop, String network, int netmask, int localpref, boolean selfOrigin, List<Integer> ASPath, UpdateMessage.UpdateParams.Origin origin) {
@@ -33,5 +36,29 @@ public class Route {
         this.selfOrigin = params.selfOrigin;
         this.ASPath = params.ASPath;
         this.origin = params.origin;
+    }
+
+    /**
+     * Returns the netmask in the format of an IP address.
+     * @return the netmask in the format of an IP address.
+     */
+    public String getNetmask() {
+        StringBuilder ipBuilder = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            StringBuilder binaryBuilder = new StringBuilder();
+
+            for (int j = 0; j < 8; j++) {
+                if ((i) * 8 + j + 1 <= netmask) {
+                    binaryBuilder.append("1");
+                } else {
+                    binaryBuilder.append("0");
+                }
+            }
+            ipBuilder.append(Integer.parseInt(binaryBuilder.toString(), 2));
+            if (i < 3) {
+                ipBuilder.append(".");
+            }
+        }
+        return ipBuilder.toString();
     }
 }

@@ -1,11 +1,13 @@
 package messages;
 
+import java.util.ArrayList;
 import java.util.List;
 
-public class UpdateMessage extends Message{
+public class UpdateMessage extends Message {
     public UpdateMessage(String src, String dst, PublicUpdateParams msg) {
         super(MessageType.update, src, dst, msg);
     }
+
     public UpdateParams getUpdateParams() {
         return (UpdateParams) msg;
     }
@@ -14,8 +16,9 @@ public class UpdateMessage extends Message{
         PublicUpdateParams params = new PublicUpdateParams((UpdateParams) msg);
         params.ASPath.add(0, asn);
 
-        return new PublicUpdateParams((UpdateParams) msg);
+        return params;
     }
+
     public static class PublicUpdateParams {
         public String network;
         public String netmask;
@@ -30,15 +33,17 @@ public class UpdateMessage extends Message{
         public PublicUpdateParams(UpdateParams params) {
             this.network = params.network;
             this.netmask = params.netmask;
-            this.ASPath = params.ASPath;
+            this.ASPath = new ArrayList<>(params.ASPath);
         }
     }
-    public static class UpdateParams extends PublicUpdateParams{
+
+    public static class UpdateParams extends PublicUpdateParams {
         public enum Origin {
             IGP,
             EGP,
             UNK
         }
+
         public int localpref;
         public boolean selfOrigin;
         public Origin origin;

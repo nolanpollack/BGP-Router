@@ -5,10 +5,12 @@ public abstract class Message {
         handshake,
         update,
         data,
-        noRoute
+        noRoute,
+        dump,
+        table
     }
 
-    private MessageType type;
+    private final MessageType type;
     public String src;
     public String dst;
     public Object msg;

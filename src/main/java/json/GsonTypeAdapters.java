@@ -2,20 +2,46 @@ package json;
 
 import com.google.gson.*;
 import messages.DataMessage;
+import messages.DumpMessage;
 import messages.Message;
 import messages.UpdateMessage;
+import remote.Route;
 
 import java.lang.reflect.Type;
 
+/**
+ * Contains type adapters for Gson to serialize and deserialize messages.
+ */
 public class GsonTypeAdapters {
+    public static class RouteSerializer implements JsonSerializer<Route> {
+        @Override
+        public JsonElement serialize(Route route, Type type, JsonSerializationContext jsonSerializationContext) {
+            Gson gson = new Gson();
+            JsonObject jsonObject = new JsonObject();
+            jsonObject.addProperty("network", route.network);
+            jsonObject.addProperty("netmask", route.getNetmask());
+            jsonObject.addProperty("peer", route.nextHop);
+            jsonObject.addProperty("localpref", route.localpref);
+            jsonObject.add("ASPath", gson.toJsonTree(route.ASPath).getAsJsonArray());
+            jsonObject.addProperty("selfOrigin", route.selfOrigin);
+            jsonObject.addProperty("origin", route.origin.toString());
+            return jsonObject;
+        }
+    }
+
     public static class MessageSerializer implements JsonSerializer<Message> {
         @Override
         public JsonElement serialize(Message message, Type type, JsonSerializationContext jsonSerializationContext) {
-            Gson gson = new Gson();
+            GsonBuilder builder = new GsonBuilder();
+            builder.registerTypeAdapter(Route.class, new RouteSerializer());
+            Gson gson = builder.create();
             String json = gson.toJson(message);
             JsonObject jsonObject = gson.fromJson(json, JsonObject.class);
             if (message.msg == null) {
                 jsonObject.add("msg", new JsonObject());
+            }
+            if (message.getType().equals(Message.MessageType.noRoute)) {
+                jsonObject.addProperty("type", "no route");
             }
             return jsonObject;
         }
@@ -47,6 +73,8 @@ public class GsonTypeAdapters {
                     return gson.fromJson(jsonElement, UpdateMessage.class);
                 case "data":
                     return gson.fromJson(jsonElement, DataMessage.class);
+                case "dump":
+                    return gson.fromJson(jsonElement, DumpMessage.class);
                 default:
                     return gson.fromJson(jsonElement, Message.class);
             }

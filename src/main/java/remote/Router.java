@@ -19,7 +19,6 @@ import java.util.*;
 
 import static messages.UpdateMessage.UpdateParams.Origin.*;
 
-
 public class Router {
     static Map<String, String> relations = new HashMap<>();
     static Map<String, DatagramSocket> sockets = new HashMap<>();
@@ -30,7 +29,8 @@ public class Router {
 
     /**
      * Create a new router
-     * @param asn AS number of this router
+     *
+     * @param asn         AS number of this router
      * @param connections List of connections in the form of "port-neighbor-relation"
      * @throws Exception
      */
@@ -61,19 +61,25 @@ public class Router {
     }
 
     /**
-     * Initialize the Gson object by registering the MessageSerializer and MessageDeserializer.
+     * Initialize the Gson object by registering serializers and deserializers.
+     *
      * @return Gson object.
      */
     private Gson initGson() {
         GsonBuilder builder = new GsonBuilder();
-        builder.registerTypeAdapter(HandshakeMessage.class, new MessageSerializer());
+
         builder.registerTypeAdapter(Message.class, new MessageDeserializer());
+
+        builder.registerTypeAdapter(HandshakeMessage.class, new MessageSerializer());
+        builder.registerTypeAdapter(NoRouteMessage.class, new MessageSerializer());
+        builder.registerTypeAdapter(TableMessage.class, new MessageSerializer());
 
         return builder.create();
     }
 
     /**
-     * Return the address of this router based on the address of the neighbor.
+     * Return the address of this router based on the address of a neighbor.
+     *
      * @param dst Address of the neighbor.
      * @return Address of this router.
      */
@@ -85,6 +91,7 @@ public class Router {
 
     /**
      * Send a message to a network.
+     *
      * @param network Network to send the message to.
      * @param message Message to send.
      * @throws Exception If the message could not be sent.
@@ -96,7 +103,11 @@ public class Router {
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), ports.get(network));
         sockets.get(network).getChannel().send(byteBuffer, address);
     }
-    
+
+    /**
+     * Initiates loop that listens for incoming messages and handles them.
+     * @throws Exception If the router could not be started.
+     */
     public void run() throws Exception {
         Selector selector = Selector.open();
         for (String neighbor : sockets.keySet()) {
@@ -124,6 +135,11 @@ public class Router {
         }
     }
 
+    /**
+     * Handles a message based on its type.
+     * @param msg Message to handle.
+     * @throws Exception If the message could not be handled.
+     */
     public void handleMessage(String msg) throws Exception {
         Message message = gson.fromJson(msg, Message.class);
         switch (message.getType()) {
@@ -133,11 +149,19 @@ public class Router {
             case data:
                 handleData((DataMessage) message);
                 break;
+            case dump:
+                handleDump((DumpMessage) message);
+                break;
             default:
                 System.out.println("Unknown message type");
         }
     }
 
+    /**
+     * Handles an update message by updating the routing table and forwarding the message to neighbors.
+     * @param message Message to handle.
+     * @throws Exception If the message could not be handled.
+     */
     public void handleUpdate(UpdateMessage message) throws Exception {
         if (message.dst.equals(ourAddr(message.src))) {
             updateRoutingTable(message);
@@ -149,11 +173,20 @@ public class Router {
         }
     }
 
+    /**
+     * Updates the routing table based on an update message.
+     * @param message Message to update the routing table with.
+     */
     public void updateRoutingTable(UpdateMessage message) {
         UpdateMessage.UpdateParams params = message.getUpdateParams();
         routingTable.add(new Route(params, message.src));
     }
 
+    /**
+     * Broadcasts an update message to all neighbors.
+     * @param message Message to broadcast.
+     * @throws Exception
+     */
     private void broadcastUpdate(UpdateMessage message) throws Exception {
         for (String neighbor : ports.keySet()) {
             if (!neighbor.equals(message.src)) {
@@ -162,6 +195,11 @@ public class Router {
         }
     }
 
+    /**
+     * Sends an update message to all customers.
+     * @param message Message to send.
+     * @throws Exception If the message could not be sent.
+     */
     private void updateCustomers(UpdateMessage message) throws Exception {
         for (String neighbor : ports.keySet()) {
             if (!neighbor.equals(message.src) && relations.get(neighbor).equals("cust")) {
@@ -170,21 +208,32 @@ public class Router {
         }
     }
 
+    /**
+     * Sends an update message to a specific destination.
+     * @param destination Destination to send the message to.
+     * @param message Message to send.
+     * @throws Exception If the message could not be sent.
+     */
     private void sendUpdate(String destination, UpdateMessage message) throws Exception {
         UpdateMessage update = new UpdateMessage(ourAddr(destination), destination, message.getPublicUpdateParams(asn));
         send(destination, gson.toJson(update));
     }
 
+    /**
+     * Handles a data message by forwarding it to the next hop or sending a no route message if no legal route is found.
+     * @param message Data message.
+     * @throws Exception
+     */
     public void handleData(DataMessage message) throws Exception {
         Optional<Route> bestRoute = getBestRoute(message.dst);
 
         if (bestRoute.isEmpty()) {
-            send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src, null)));
+            send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
         } else {
             Optional<Route> srcRoute = getBestRoute(message.src);
 
             if (srcRoute.isEmpty()) {
-                send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src, null)));
+                send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
             } else {
                 String srcRouter = srcRoute.get().nextHop;
                 String dstRouter = bestRoute.get().nextHop;
@@ -192,14 +241,16 @@ public class Router {
                 if (relations.get(srcRouter).equals("cust") || relations.get(dstRouter).equals("cust")) {
                     send(bestRoute.get().nextHop, gson.toJson(message));
                 } else {
-                    send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src, null)));
+                    send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
                 }
             }
         }
     }
 
     /**
-     * Searches the routing table for the best route to the given IP address.
+     * Searches the routing table for the best route to the given IP address, based on the 5 rules to selecting
+     * a path.
+     *
      * @param ip The IP address to search for.
      * @return The best route to the given IP address or an empty optional if no route was found.
      */
@@ -229,7 +280,7 @@ public class Router {
                                 bestRoute = Optional.of(route);
                             } else if (route.ASPath.size() == bestRoute.get().ASPath.size()) {
                                 if (route.origin == bestRoute.get().origin) {
-                                    if (Integer.parseInt(toBinary(route.nextHop)) < Integer.parseInt(toBinary(bestRoute.get().nextHop))) {
+                                    if (Integer.parseInt(route.nextHop.replace(".","")) < Integer.parseInt(bestRoute.get().nextHop.replace(".",""))) {
                                         //If the next hop is lower than the current best route
                                         bestRoute = Optional.of(route);
                                     }
@@ -249,6 +300,11 @@ public class Router {
         return bestRoute;
     }
 
+    /**
+     * Converts an IP address to a binary string.
+     * @param ip The IP address to convert.
+     * @return The binary string representation of the IP address.
+     */
     public static String toBinary(String ip) {
         String[] quads = ip.split("\\.");
         StringBuilder binaryIP = new StringBuilder();
@@ -258,6 +314,21 @@ public class Router {
         return binaryIP.toString();
     }
 
+    /**
+     * Handles a dump message by sending the routing table to the sender.
+     * @param message The dump message to handle.
+     * @throws Exception If the message could not be sent.
+     */
+    private void handleDump(DumpMessage message) throws Exception {
+        send(message.src, gson.toJson(new TableMessage(ourAddr(message.src), message.src, routingTable)));
+    }
+
+    /**
+     * Receives and handles a message from the given selection key.
+     * @param key The selection key to receive the message from. Must be readable.
+     * @return Message received.
+     * @throws IOException If the message could not be read.
+     */
     private String readMessage(SelectionKey key) throws IOException {
         // Read the incoming data
         ByteBuffer buffer = ByteBuffer.allocate(65535);
@@ -270,6 +341,11 @@ public class Router {
         return msg;
     }
 
+    /**
+     * Creates a router with the given ASN and connections, then runs it.
+     * @param args First argument is the ASN, the rest are the connections formatted as port-ip-relationship.
+     * @throws Exception If the router could not be created or run.
+     */
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             System.out.println("Usage: java Router <asn> <connections>");
