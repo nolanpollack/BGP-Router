@@ -7,7 +7,8 @@ public abstract class Message {
         data,
         noRoute,
         dump,
-        table
+        table,
+        withdraw
     }
 
     private final MessageType type;

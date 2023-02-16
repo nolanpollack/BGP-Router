@@ -106,6 +106,7 @@ public class Router {
 
     /**
      * Initiates loop that listens for incoming messages and handles them.
+     *
      * @throws Exception If the router could not be started.
      */
     public void run() throws Exception {
@@ -137,6 +138,7 @@ public class Router {
 
     /**
      * Handles a message based on its type.
+     *
      * @param msg Message to handle.
      * @throws Exception If the message could not be handled.
      */
@@ -152,6 +154,9 @@ public class Router {
             case dump:
                 handleDump((DumpMessage) message);
                 break;
+            case withdraw:
+                handleWithdraw((WithdrawMessage) message);
+                break;
             default:
                 System.out.println("Unknown message type");
         }
@@ -159,22 +164,28 @@ public class Router {
 
     /**
      * Handles an update message by updating the routing table and forwarding the message to neighbors.
+     *
      * @param message Message to handle.
      * @throws Exception If the message could not be handled.
      */
     public void handleUpdate(UpdateMessage message) throws Exception {
         if (message.dst.equals(ourAddr(message.src))) {
             updateRoutingTable(message);
-            if (relations.get(message.src).equals("cust")) {
-                broadcastUpdate(message);
-            } else {
-                updateCustomers(message);
-            }
+            updateAppropriate(message);
+        }
+    }
+
+    private void updateAppropriate(Message message) throws Exception {
+        if (relations.get(message.src).equals("cust")) {
+            broadcastUpdate(message);
+        } else {
+            updateCustomers(message);
         }
     }
 
     /**
      * Updates the routing table based on an update message.
+     *
      * @param message Message to update the routing table with.
      */
     public void updateRoutingTable(UpdateMessage message) {
@@ -184,10 +195,11 @@ public class Router {
 
     /**
      * Broadcasts an update message to all neighbors.
+     *
      * @param message Message to broadcast.
      * @throws Exception
      */
-    private void broadcastUpdate(UpdateMessage message) throws Exception {
+    private void broadcastUpdate(Message message) throws Exception {
         for (String neighbor : ports.keySet()) {
             if (!neighbor.equals(message.src)) {
                 sendUpdate(neighbor, message);
@@ -197,10 +209,11 @@ public class Router {
 
     /**
      * Sends an update message to all customers.
+     *
      * @param message Message to send.
      * @throws Exception If the message could not be sent.
      */
-    private void updateCustomers(UpdateMessage message) throws Exception {
+    private void updateCustomers(Message message) throws Exception {
         for (String neighbor : ports.keySet()) {
             if (!neighbor.equals(message.src) && relations.get(neighbor).equals("cust")) {
                 sendUpdate(neighbor, message);
@@ -210,17 +223,24 @@ public class Router {
 
     /**
      * Sends an update message to a specific destination.
+     *
      * @param destination Destination to send the message to.
-     * @param message Message to send.
+     * @param message     Message to send.
      * @throws Exception If the message could not be sent.
      */
-    private void sendUpdate(String destination, UpdateMessage message) throws Exception {
-        UpdateMessage update = new UpdateMessage(ourAddr(destination), destination, message.getPublicUpdateParams(asn));
+    private void sendUpdate(String destination, Message message) throws Exception {
+        Message update;
+        if (message instanceof UpdateMessage) {
+            update = new UpdateMessage(ourAddr(destination), destination, ((UpdateMessage) message).getPublicUpdateParams(asn));
+        } else {
+            update = new WithdrawMessage(ourAddr(destination), destination, ((WithdrawMessage) message).getWithdrawNetworks());
+        }
         send(destination, gson.toJson(update));
     }
 
     /**
      * Handles a data message by forwarding it to the next hop or sending a no route message if no legal route is found.
+     *
      * @param message Data message.
      * @throws Exception
      */
@@ -280,7 +300,7 @@ public class Router {
                                 bestRoute = Optional.of(route);
                             } else if (route.ASPath.size() == bestRoute.get().ASPath.size()) {
                                 if (route.origin == bestRoute.get().origin) {
-                                    if (Integer.parseInt(route.nextHop.replace(".","")) < Integer.parseInt(bestRoute.get().nextHop.replace(".",""))) {
+                                    if (Integer.parseInt(route.nextHop.replace(".", "")) < Integer.parseInt(bestRoute.get().nextHop.replace(".", ""))) {
                                         //If the next hop is lower than the current best route
                                         bestRoute = Optional.of(route);
                                     }
@@ -302,6 +322,7 @@ public class Router {
 
     /**
      * Converts an IP address to a binary string.
+     *
      * @param ip The IP address to convert.
      * @return The binary string representation of the IP address.
      */
@@ -316,6 +337,7 @@ public class Router {
 
     /**
      * Handles a dump message by sending the routing table to the sender.
+     *
      * @param message The dump message to handle.
      * @throws Exception If the message could not be sent.
      */
@@ -323,8 +345,19 @@ public class Router {
         send(message.src, gson.toJson(new TableMessage(ourAddr(message.src), message.src, routingTable)));
     }
 
+    private void handleWithdraw(WithdrawMessage message) throws Exception {
+        for (WithdrawMessage.WithdrawNetwork withdrawNetwork : message.getWithdrawNetworks()) {
+            routingTable.removeIf(route -> route.network.equals(withdrawNetwork.network)
+                    && route.getNetmask().equals(withdrawNetwork.netmask)
+                    && route.nextHop.equals(message.src));
+        }
+
+        updateAppropriate(message);
+    }
+
     /**
      * Receives and handles a message from the given selection key.
+     *
      * @param key The selection key to receive the message from. Must be readable.
      * @return Message received.
      * @throws IOException If the message could not be read.
@@ -343,6 +376,7 @@ public class Router {
 
     /**
      * Creates a router with the given ASN and connections, then runs it.
+     *
      * @param args First argument is the ASN, the rest are the connections formatted as port-ip-relationship.
      * @throws Exception If the router could not be created or run.
      */

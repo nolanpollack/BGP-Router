@@ -1,10 +1,7 @@
 package json;
 
 import com.google.gson.*;
-import messages.DataMessage;
-import messages.DumpMessage;
-import messages.Message;
-import messages.UpdateMessage;
+import messages.*;
 import remote.Route;
 
 import java.lang.reflect.Type;
@@ -59,11 +56,24 @@ public class GsonTypeAdapters {
         }
     }
 
+    public static class WithdrawMessageDeserializer implements JsonDeserializer<WithdrawMessage> {
+        @Override
+        public WithdrawMessage deserialize(JsonElement jsonElement, Type type, JsonDeserializationContext jsonDeserializationContext) throws JsonParseException {
+            Gson gson = new Gson();
+
+            WithdrawMessage withdrawMessage = gson.fromJson(jsonElement, WithdrawMessage.class);
+            withdrawMessage.msg = gson.fromJson(jsonElement.getAsJsonObject().get("msg"), WithdrawMessage.WithdrawNetwork[].class);
+
+            return withdrawMessage;
+        }
+    }
+
     public static class MessageDeserializer implements JsonDeserializer<Message> {
         @Override
         public Message deserialize(JsonElement jsonElement, Type type, JsonDeserializationContext jsonDeserializationContext) throws JsonParseException {
             GsonBuilder builder = new GsonBuilder();
             builder.registerTypeAdapter(UpdateMessage.class, new UpdateMessageDeserializer());
+            builder.registerTypeAdapter(WithdrawMessage.class, new WithdrawMessageDeserializer());
 
             Gson gson = builder.create();
             JsonObject jsonObject = jsonElement.getAsJsonObject();
@@ -75,6 +85,8 @@ public class GsonTypeAdapters {
                     return gson.fromJson(jsonElement, DataMessage.class);
                 case "dump":
                     return gson.fromJson(jsonElement, DumpMessage.class);
+                case "withdraw":
+                    return gson.fromJson(jsonElement, WithdrawMessage.class);
                 default:
                     return gson.fromJson(jsonElement, Message.class);
             }
