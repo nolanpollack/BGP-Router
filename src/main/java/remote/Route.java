@@ -31,7 +31,11 @@ public class Route {
     public Route(UpdateMessage.UpdateParams params, String nextHop) {
         this.nextHop = nextHop;
         this.network = params.network;
-        this.netmask = toBinary(params.netmask).split("0")[0].length();
+        if (params.netmask.equals("0.0.0.0")) {
+            this.netmask = 0;
+        } else {
+            this.netmask = toBinary(params.netmask).split("0")[0].length();
+        }
         this.localpref = params.localpref;
         this.selfOrigin = params.selfOrigin;
         this.ASPath = params.ASPath;
@@ -40,6 +44,7 @@ public class Route {
 
     /**
      * Returns the netmask in the format of an IP address.
+     *
      * @return the netmask in the format of an IP address.
      */
     public String getNetmask() {
@@ -60,5 +65,18 @@ public class Route {
             }
         }
         return ipBuilder.toString();
+    }
+
+    public boolean attributesEqual(Route other) {
+        return nextHop.equals(other.nextHop)
+                && localpref == other.localpref
+                && selfOrigin == other.selfOrigin
+                && ASPath.equals(other.ASPath)
+                && origin == other.origin;
+    }
+
+    @Override
+    public String toString() {
+        return network + "/" + netmask;
     }
 }

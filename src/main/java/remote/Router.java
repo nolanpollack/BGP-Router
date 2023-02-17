@@ -7,6 +7,7 @@ import json.GsonTypeAdapters.MessageSerializer;
 import messages.*;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -24,6 +25,10 @@ public class Router {
     static Map<String, DatagramSocket> sockets = new HashMap<>();
     static Map<String, Integer> ports = new HashMap<>();
     List<Route> routingTable = new ArrayList<>();
+    //Map of routes that have been aggregated, to the route they have been aggregated to.
+    Map<Route, Route> routesAggregated = new HashMap<>();
+    //Map of aggregated routes, to the routes that have been aggregated to them.
+    Map<Route, List<Route>> aggregatedRoutes = new HashMap<>();
     private final int asn;
     private final Gson gson;
 
@@ -32,7 +37,6 @@ public class Router {
      *
      * @param asn         AS number of this router
      * @param connections List of connections in the form of "port-neighbor-relation"
-     * @throws Exception
      */
     public Router(int asn, String[] connections) throws Exception {
         gson = initGson();
@@ -190,7 +194,121 @@ public class Router {
      */
     public void updateRoutingTable(UpdateMessage message) {
         UpdateMessage.UpdateParams params = message.getUpdateParams();
-        routingTable.add(new Route(params, message.src));
+        Route newRoute = new Route(params, message.src);
+
+        if (!checkAggregate(newRoute)) {
+            routingTable.add(newRoute);
+        }
+    }
+
+    private boolean checkAggregate(Route newRoute) {
+        String[] newRouteRange = getIPRange(newRoute).split("-");
+        BigInteger lowRange = toBigInt(newRouteRange[0]);
+        BigInteger highRange = toBigInt(newRouteRange[1]);
+//        BigInteger lowBin = new BigInteger(toBinary(newRouteRange[0]), 2).subtract(BigInteger.ONE);
+//        BigInteger highBin = new BigInteger(toBinary(newRouteRange[1]), 2).add(BigInteger.ONE);
+
+//        String adjacentLow = toIP(lowBin.toString(2));
+//        String adjacentHigh = toIP(highBin.toString(2));
+
+//        System.out.println("Adjacent low: " + adjacentLow);
+//        System.out.println("Adjacent high: " + adjacentHigh);
+
+        for (Route route : routingTable) {
+            if (newRoute.attributesEqual(route)) {
+                String[] routeRange = getIPRange(route).split("-");
+                BigInteger existingRouteLow = toBigInt(routeRange[0]);
+                BigInteger existingRouteHigh = toBigInt(routeRange[1]);
+
+                boolean adjacent = existingRouteLow.equals(highRange.add(BigInteger.ONE))
+                        || existingRouteHigh.equals(lowRange.subtract(BigInteger.ONE));
+                boolean existingContainsNew = existingRouteLow.compareTo(lowRange) <= 0 && existingRouteHigh.compareTo(highRange) >= 0;
+                boolean newContainsExisting = lowRange.compareTo(existingRouteLow) <= 0 && highRange.compareTo(existingRouteHigh) >= 0;
+
+                if (adjacent || existingContainsNew || newContainsExisting) {
+                    aggregate(newRoute, route);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private void aggregate(Route newRoute, Route existingRoute) {
+        routingTable.remove(existingRoute);
+
+        BigInteger newPrefix = toBigInt(newRoute.network);
+        BigInteger existingPrefix = toBigInt(existingRoute.network);
+
+        int aggregatedNetmask = 0;
+
+        for (int i = 0; i < newPrefix.bitLength(); i++) {
+            if (newPrefix.testBit(i) != existingPrefix.testBit(i)) {
+                aggregatedNetmask = i;
+                break;
+            }
+        }
+
+        BigInteger netmaskBinary = new BigInteger("1".repeat(aggregatedNetmask) + "0".repeat(32 - aggregatedNetmask), 2);
+
+        String aggregatedNetwork = toIP(newPrefix.and(netmaskBinary).toString(2));
+
+        Route aggregatedRoute = new Route(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin);
+        routingTable.add(aggregatedRoute);
+
+        aggregatedRoutes.put(aggregatedRoute, Arrays.asList(newRoute, existingRoute));
+        routesAggregated.put(newRoute, aggregatedRoute);
+        routesAggregated.put(existingRoute, aggregatedRoute);
+
+        System.out.println("Aggregated routes " + newRoute + " and " + existingRoute + " into " + aggregatedRoute);
+    }
+
+    private String getIPRange(Route route) {
+        int[] bitBoundaries = new int[]{24, 16, 8};
+        int mask;
+        int bitPrefix = 8;
+        int fixedOctet = 0;
+        if (route.netmask >= 8) {
+            mask = route.netmask;
+            for (int i = 0; i < bitBoundaries.length; i++) {
+                if (mask >= bitBoundaries[i]) {
+                    bitPrefix = bitBoundaries[i];
+                    fixedOctet = 3 - i;
+                    break;
+                }
+            }
+        } else {
+            mask = 8 + route.netmask;
+        }
+
+        int startingOctetMultiple = (int) Math.pow(2, (8 - (mask - bitPrefix)));
+
+        String[] octets = route.network.split("\\.");
+
+        StringBuilder prefixBuilder = new StringBuilder();
+        for (int i = 0; i < fixedOctet; i++) {
+            prefixBuilder.append(octets[i]);
+            prefixBuilder.append(".");
+        }
+
+        int startOfRange = (Integer.parseInt(octets[fixedOctet]) / startingOctetMultiple) * startingOctetMultiple;
+        int endOfRange = startOfRange + startingOctetMultiple - 1;
+
+        StringBuilder firstIPBuilder = new StringBuilder();
+        StringBuilder lastIPBuilder = new StringBuilder();
+
+        firstIPBuilder.append(prefixBuilder);
+        firstIPBuilder.append(startOfRange);
+        lastIPBuilder.append(prefixBuilder);
+        lastIPBuilder.append(endOfRange);
+
+        for (int i = 0; i < 3 - fixedOctet; i++) {
+            firstIPBuilder.append(".0");
+            lastIPBuilder.append(".255");
+        }
+
+        return firstIPBuilder + "-" + lastIPBuilder;
     }
 
     /**
@@ -242,29 +360,24 @@ public class Router {
      * Handles a data message by forwarding it to the next hop or sending a no route message if no legal route is found.
      *
      * @param message Data message.
-     * @throws Exception
      */
     public void handleData(DataMessage message) throws Exception {
         Optional<Route> bestRoute = getBestRoute(message.dst);
+        Optional<Route> srcRoute = getBestRoute(message.src);
 
-        if (bestRoute.isEmpty()) {
-            send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
-        } else {
-            Optional<Route> srcRoute = getBestRoute(message.src);
+        if (bestRoute.isEmpty() && srcRoute.isPresent()) {
+            send(srcRoute.get().nextHop, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
+        } else if (srcRoute.isPresent()) {
+            String srcRouter = srcRoute.get().nextHop;
+            String dstRouter = bestRoute.get().nextHop;
 
-            if (srcRoute.isEmpty()) {
-                send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
+            if (relations.get(srcRouter).equals("cust") || relations.get(dstRouter).equals("cust")) {
+                send(bestRoute.get().nextHop, gson.toJson(message));
             } else {
-                String srcRouter = srcRoute.get().nextHop;
-                String dstRouter = bestRoute.get().nextHop;
-
-                if (relations.get(srcRouter).equals("cust") || relations.get(dstRouter).equals("cust")) {
-                    send(bestRoute.get().nextHop, gson.toJson(message));
-                } else {
-                    send(message.src, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
-                }
+                send(srcRouter, gson.toJson(new NoRouteMessage(ourAddr(message.src), message.src)));
             }
         }
+
     }
 
     /**
@@ -329,10 +442,37 @@ public class Router {
     public static String toBinary(String ip) {
         String[] quads = ip.split("\\.");
         StringBuilder binaryIP = new StringBuilder();
-        for (int i = 0; i < quads.length; i++) {
-            binaryIP.append(Integer.toBinaryString(1 << 8 | Integer.parseInt(quads[i])).substring(1));
+        for (String quad : quads) {
+            binaryIP.append(Integer.toBinaryString(1 << 8 | Integer.parseInt(quad)).substring(1));
         }
         return binaryIP.toString();
+    }
+
+    /**
+     * Converts a binary string to an IP address.
+     *
+     * @param ip The binary string to convert.
+     * @return The IP address.
+     */
+    public static String toIP(String ip) {
+        StringBuilder ipString = new StringBuilder();
+        for (int i = 0; i <= ip.length() - 8; i += 8) {
+            ipString.append(Integer.parseInt(ip.substring(i, i + 8), 2));
+            if (i != ip.length() - 8) {
+                ipString.append(".");
+            }
+        }
+        return ipString.toString();
+    }
+
+    /**
+     * Converts an IP address to a BigInteger.
+     *
+     * @param ip The IP address to convert.
+     * @return The BigInteger representation of the IP address.
+     */
+    public static BigInteger toBigInt(String ip) {
+        return new BigInteger("0" + toBinary(ip), 2);
     }
 
     /**
@@ -347,6 +487,25 @@ public class Router {
 
     private void handleWithdraw(WithdrawMessage message) throws Exception {
         for (WithdrawMessage.WithdrawNetwork withdrawNetwork : message.getWithdrawNetworks()) {
+            for (Route route : routesAggregated.keySet()) {
+                if (route.network.equals(withdrawNetwork.network)
+                        && route.getNetmask().equals(withdrawNetwork.netmask)
+                        && route.nextHop.equals(message.src)) {
+                    //Find the route that's actually in the table and remove it
+                    Route aggregatedRoute = routesAggregated.get(route);
+                    routingTable.remove(aggregatedRoute);
+
+                    //Find the routes that were previously aggregated, remove the withdrawn route from the list and
+                    // add the rest back to the table
+                    List<Route> routes = aggregatedRoutes.get(aggregatedRoute);
+                    routes.remove(route);
+                    routingTable.addAll(aggregatedRoutes.get(aggregatedRoute));
+
+                    //Remove the route from the maps
+                    routesAggregated.remove(route);
+                    aggregatedRoutes.remove(aggregatedRoute);
+                }
+            }
             routingTable.removeIf(route -> route.network.equals(withdrawNetwork.network)
                     && route.getNetmask().equals(withdrawNetwork.netmask)
                     && route.nextHop.equals(message.src));
