@@ -101,7 +101,7 @@ public class Router {
      * @throws Exception If the message could not be sent.
      */
     public void send(String network, String message) throws Exception {
-        System.out.println("Sending message '" + message + "' to " + network);
+//        System.out.println("Sending message '" + message + "' to " + network);
         byte[] buffer = message.getBytes(StandardCharsets.UTF_8);
         ByteBuffer byteBuffer = ByteBuffer.wrap(buffer);
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), ports.get(network));
@@ -205,14 +205,6 @@ public class Router {
         String[] newRouteRange = getIPRange(newRoute).split("-");
         BigInteger lowRange = toBigInt(newRouteRange[0]);
         BigInteger highRange = toBigInt(newRouteRange[1]);
-//        BigInteger lowBin = new BigInteger(toBinary(newRouteRange[0]), 2).subtract(BigInteger.ONE);
-//        BigInteger highBin = new BigInteger(toBinary(newRouteRange[1]), 2).add(BigInteger.ONE);
-
-//        String adjacentLow = toIP(lowBin.toString(2));
-//        String adjacentHigh = toIP(highBin.toString(2));
-
-//        System.out.println("Adjacent low: " + adjacentLow);
-//        System.out.println("Adjacent high: " + adjacentHigh);
 
         for (Route route : routingTable) {
             if (newRoute.attributesEqual(route)) {
@@ -238,30 +230,69 @@ public class Router {
     private void aggregate(Route newRoute, Route existingRoute) {
         routingTable.remove(existingRoute);
 
-        BigInteger newPrefix = toBigInt(newRoute.network);
-        BigInteger existingPrefix = toBigInt(existingRoute.network);
+        String newPrefix = toBinary(newRoute.network);
+        String existingPrefix = toBinary(existingRoute.network);
 
         int aggregatedNetmask = 0;
 
-        for (int i = 0; i < newPrefix.bitLength(); i++) {
-            if (newPrefix.testBit(i) != existingPrefix.testBit(i)) {
+        for (int i = 0; i < newPrefix.length(); i++) {
+            if (newPrefix.charAt(i) != existingPrefix.charAt(i)) {
                 aggregatedNetmask = i;
                 break;
             }
         }
 
-        BigInteger netmaskBinary = new BigInteger("1".repeat(aggregatedNetmask) + "0".repeat(32 - aggregatedNetmask), 2);
+        String netmaskBinary = "1".repeat(aggregatedNetmask) + "0".repeat(32 - aggregatedNetmask);
 
-        String aggregatedNetwork = toIP(newPrefix.and(netmaskBinary).toString(2));
+        String aggregatedNetwork = toIP(binaryAnd(newPrefix,netmaskBinary));
 
         Route aggregatedRoute = new Route(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin);
-        routingTable.add(aggregatedRoute);
+        boolean aggregatedAlreadyExists = false;
+        for (Route r: routingTable) {
+            if (r.network.equals(aggregatedNetwork) && r.netmask == aggregatedNetmask && r.nextHop.equals(aggregatedRoute.nextHop)){
+                aggregatedRoute = r;
+                aggregatedAlreadyExists = true;
+                break;
+            }
+        }
 
-        aggregatedRoutes.put(aggregatedRoute, Arrays.asList(newRoute, existingRoute));
+        List<Route> routeCache;
+
+        if (aggregatedAlreadyExists) {
+            routeCache = aggregatedRoutes.get(aggregatedRoute);
+        } else {
+            routeCache = new ArrayList<>();
+            routingTable.add(aggregatedRoute);
+            routeCache.add(existingRoute);
+            routesAggregated.put(existingRoute, aggregatedRoute);
+        }
+
+        routeCache.add(newRoute);
+//        if(aggregatedRoutes.containsKey(aggregatedRoute)){
+//            routeCache.addAll(aggregatedRoutes.get(aggregatedRoute));
+//        }
+        aggregatedRoutes.put(aggregatedRoute, routeCache);
         routesAggregated.put(newRoute, aggregatedRoute);
-        routesAggregated.put(existingRoute, aggregatedRoute);
 
-        System.out.println("Aggregated routes " + newRoute + " and " + existingRoute + " into " + aggregatedRoute);
+        System.out.println("Aggregated " + newRoute + " and " + existingRoute + " into " + aggregatedRoute);
+    }
+
+    /**
+     * Performs a binary AND operation on two binary strings.
+     * @param binary1 The first binary string.
+     * @param binary2 The second binary string.
+     * @return The result of the binary AND operation.
+     */
+    private String binaryAnd(String binary1, String binary2) {
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < binary1.length(); i++) {
+            if (binary1.charAt(i) == '1' && binary2.charAt(i) == '1') {
+                result.append("1");
+            } else {
+                result.append("0");
+            }
+        }
+        return result.toString();
     }
 
     private String getIPRange(Route route) {
@@ -490,20 +521,9 @@ public class Router {
             for (Route route : routesAggregated.keySet()) {
                 if (route.network.equals(withdrawNetwork.network)
                         && route.getNetmask().equals(withdrawNetwork.netmask)
-                        && route.nextHop.equals(message.src)) {
-                    //Find the route that's actually in the table and remove it
-                    Route aggregatedRoute = routesAggregated.get(route);
-                    routingTable.remove(aggregatedRoute);
-
-                    //Find the routes that were previously aggregated, remove the withdrawn route from the list and
-                    // add the rest back to the table
-                    List<Route> routes = aggregatedRoutes.get(aggregatedRoute);
-                    routes.remove(route);
-                    routingTable.addAll(aggregatedRoutes.get(aggregatedRoute));
-
-                    //Remove the route from the maps
-                    routesAggregated.remove(route);
-                    aggregatedRoutes.remove(aggregatedRoute);
+                        && route.nextHop.equals(message.src)){
+                    disaggregateAndWithdraw(route);
+                    break;
                 }
             }
             routingTable.removeIf(route -> route.network.equals(withdrawNetwork.network)
@@ -512,6 +532,41 @@ public class Router {
         }
 
         updateAppropriate(message);
+    }
+
+    private void disaggregateAndWithdraw(Route route) {
+        //Find the route that's actually in the table and remove it
+        Route aggregatedRoute = routesAggregated.get(route);
+        routingTable.remove(aggregatedRoute);
+
+        //Find the routes that were previously aggregated, remove the withdrawn route from the list and
+        // add the rest back to the table
+        List<Route> disaggregatedRoutes = aggregatedRoutes.get(aggregatedRoute);
+        disaggregatedRoutes.remove(route);
+        routingTable.addAll(disaggregatedRoutes);
+        System.out.println("Removing " + aggregatedRoute + " and adding " + disaggregatedRoutes);
+
+        //If the other range contains it, we have to disaggregate it too.
+        String[] withdrawnRange = getIPRange(route).split("-");
+        BigInteger lowWithdrawnRange = toBigInt(withdrawnRange[0]);
+        BigInteger highWithdrawnRange = toBigInt(withdrawnRange[1]);
+        for (Route r : aggregatedRoutes.get(aggregatedRoute)) {
+            String[] addedBackRange = getIPRange(route).split("-");
+            BigInteger lowAddedBackRange = toBigInt(addedBackRange[0]);
+            BigInteger highAddedBackRange = toBigInt(addedBackRange[1]);
+
+            if (lowWithdrawnRange.compareTo(lowAddedBackRange) >= 0 && highWithdrawnRange.compareTo(highAddedBackRange) <= 0) {
+                //If the withdrawn range contains the added back range
+                disaggregateAndWithdraw(r);
+                break;
+            }
+        }
+
+
+
+        //Remove the route from the maps
+        routesAggregated.remove(route);
+        aggregatedRoutes.remove(aggregatedRoute);
     }
 
     /**
@@ -529,7 +584,7 @@ public class Router {
 
         buffer.flip();
         String msg = new String(buffer.array(), 0, buffer.limit());
-        System.out.println("Received message '" + msg + "' from " + source);
+//        System.out.println("Received message '" + msg + "' from " + source);
         return msg;
     }
 
