@@ -244,16 +244,16 @@ public class Router {
 
         String netmaskBinary = "1".repeat(aggregatedNetmask) + "0".repeat(32 - aggregatedNetmask);
 
-        String aggregatedNetwork = toIP(binaryAnd(newPrefix,netmaskBinary));
+        String aggregatedNetwork = toIP(binaryAnd(newPrefix, netmaskBinary));
 
         Route aggregatedRoute = new Route(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin);
         boolean aggregatedAlreadyExists = false;
-        for (Route r: routingTable) {
-            if (r.network.equals(aggregatedNetwork) && r.netmask == aggregatedNetmask && r.nextHop.equals(aggregatedRoute.nextHop)){
-                aggregatedRoute = r;
-                aggregatedAlreadyExists = true;
-                break;
-            }
+
+        if (existingRoute.network.equals(aggregatedNetwork)
+                && existingRoute.netmask == aggregatedNetmask
+                && existingRoute.nextHop.equals(aggregatedRoute.nextHop)) {
+            aggregatedRoute = existingRoute;
+            aggregatedAlreadyExists = true;
         }
 
         List<Route> routeCache;
@@ -274,11 +274,12 @@ public class Router {
         aggregatedRoutes.put(aggregatedRoute, routeCache);
         routesAggregated.put(newRoute, aggregatedRoute);
 
-        System.out.println("Aggregated " + newRoute + " and " + existingRoute + " into " + aggregatedRoute);
+        System.out.println("Aggregated " + routeCache + " into " + aggregatedRoute);
     }
 
     /**
      * Performs a binary AND operation on two binary strings.
+     *
      * @param binary1 The first binary string.
      * @param binary2 The second binary string.
      * @return The result of the binary AND operation.
@@ -521,7 +522,7 @@ public class Router {
             for (Route route : routesAggregated.keySet()) {
                 if (route.network.equals(withdrawNetwork.network)
                         && route.getNetmask().equals(withdrawNetwork.netmask)
-                        && route.nextHop.equals(message.src)){
+                        && route.nextHop.equals(message.src)) {
                     disaggregateAndWithdraw(route);
                     break;
                 }
@@ -561,7 +562,6 @@ public class Router {
                 break;
             }
         }
-
 
 
         //Remove the route from the maps
