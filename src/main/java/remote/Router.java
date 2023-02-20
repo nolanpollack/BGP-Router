@@ -26,9 +26,7 @@ public class Router {
     static Map<String, Integer> ports = new HashMap<>();
     List<Route> routingTable = new ArrayList<>();
     //Map of routes that have been aggregated, to the route they have been aggregated to.
-    Map<Route, Route> routesAggregated = new HashMap<>();
-    //Map of aggregated routes, to the routes that have been aggregated to them.
-    Map<Route, List<Route>> aggregatedRoutes = new HashMap<>();
+    Map<Route, AggregatedRoute> routesAggregated = new HashMap<>();
     private final int asn;
     private final Gson gson;
 
@@ -198,6 +196,7 @@ public class Router {
 
         if (!checkAggregate(newRoute)) {
             routingTable.add(newRoute);
+            System.out.println("Adding route " + newRoute + " to routing table");
         }
     }
 
@@ -263,24 +262,27 @@ public class Router {
 
         String aggregatedNetwork = toIP(binaryAnd(newPrefix, netmaskBinary));
 
-        AggregatedRoute aggregatedRoute = new AggregatedRoute(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin,
-                newRoute, existingRoute);
-
-        System.out.println("Aggregated Route: " + aggregatedRoute + " from " + newRoute + " and " + existingRoute);
-
-        routesAggregated.put(newRoute, aggregatedRoute);
-        routesAggregated.put(existingRoute, aggregatedRoute);
-
+        List<Route> routesInside = new ArrayList<>();
+        routesInside.add(newRoute);
         if (existingRoute instanceof AggregatedRoute) {
-            AggregatedRoute existingRouteAggregated = (AggregatedRoute) existingRoute;
-            if (routesCanBeAggregated(existingRouteAggregated.lowerRoute, newRoute)) {
-                aggregatedRoute.lowerRoute = getAggregatedRoute(newRoute, existingRouteAggregated.lowerRoute);
-            } else if (routesCanBeAggregated(existingRouteAggregated.upperRoute, newRoute)) {
-                aggregatedRoute.upperRoute = getAggregatedRoute(newRoute, existingRouteAggregated.upperRoute);
-            }
+            routesInside.addAll(((AggregatedRoute) existingRoute).getRoutesInside());
+        } else {
+            routesInside.add(existingRoute);
         }
 
+        AggregatedRoute aggregatedRoute = new AggregatedRoute(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin,
+                routesInside);
 
+        if (existingRoute.equals(aggregatedRoute)) {
+            AggregatedRoute existingAggregatedRoute = (AggregatedRoute) existingRoute;
+            existingAggregatedRoute.includeRoute(newRoute);
+            System.out.println("Aggregated Route: " + existingRoute + " from " + existingAggregatedRoute.getRoutesInside());
+            routesAggregated.put(newRoute, existingAggregatedRoute);
+        } else {
+            System.out.println("Aggregated Route: " + aggregatedRoute + " from " + routesInside);
+            routesAggregated.put(newRoute, aggregatedRoute);
+            routesAggregated.put(existingRoute, aggregatedRoute);
+        }
 
         return aggregatedRoute;
     }
@@ -305,50 +307,54 @@ public class Router {
     }
 
     private String getIPRange(Route route) {
-        int[] bitBoundaries = new int[]{24, 16, 8};
-        int mask;
-        int bitPrefix = 8;
-        int fixedOctet = 0;
-        if (route.netmask >= 8) {
-            mask = route.netmask;
-            for (int i = 0; i < bitBoundaries.length; i++) {
-                if (mask >= bitBoundaries[i]) {
-                    bitPrefix = bitBoundaries[i];
-                    fixedOctet = 3 - i;
-                    break;
-                }
-            }
+        if (route.netmask == 0) {
+            return "0.0.0.0-0.0.0.0";
         } else {
-            mask = 8 + route.netmask;
+            int[] bitBoundaries = new int[]{24, 16, 8};
+            int mask;
+            int bitPrefix = 8;
+            int fixedOctet = 0;
+            if (route.netmask >= 8) {
+                mask = route.netmask;
+                for (int i = 0; i < bitBoundaries.length; i++) {
+                    if (mask >= bitBoundaries[i]) {
+                        bitPrefix = bitBoundaries[i];
+                        fixedOctet = 3 - i;
+                        break;
+                    }
+                }
+            } else {
+                mask = 8 + route.netmask;
+            }
+
+            int startingOctetMultiple = (int) Math.pow(2, (8 - (mask - bitPrefix)));
+
+            String[] octets = route.network.split("\\.");
+
+            StringBuilder prefixBuilder = new StringBuilder();
+            for (int i = 0; i < fixedOctet; i++) {
+                prefixBuilder.append(octets[i]);
+                prefixBuilder.append(".");
+            }
+
+            int startOfRange = (Integer.parseInt(octets[fixedOctet]) / startingOctetMultiple) * startingOctetMultiple;
+            int endOfRange = startOfRange + startingOctetMultiple - 1;
+
+            StringBuilder firstIPBuilder = new StringBuilder();
+            StringBuilder lastIPBuilder = new StringBuilder();
+
+            firstIPBuilder.append(prefixBuilder);
+            firstIPBuilder.append(startOfRange);
+            lastIPBuilder.append(prefixBuilder);
+            lastIPBuilder.append(endOfRange);
+
+            for (int i = 0; i < 3 - fixedOctet; i++) {
+                firstIPBuilder.append(".0");
+                lastIPBuilder.append(".255");
+            }
+
+            return firstIPBuilder + "-" + lastIPBuilder;
         }
-
-        int startingOctetMultiple = (int) Math.pow(2, (8 - (mask - bitPrefix)));
-
-        String[] octets = route.network.split("\\.");
-
-        StringBuilder prefixBuilder = new StringBuilder();
-        for (int i = 0; i < fixedOctet; i++) {
-            prefixBuilder.append(octets[i]);
-            prefixBuilder.append(".");
-        }
-
-        int startOfRange = (Integer.parseInt(octets[fixedOctet]) / startingOctetMultiple) * startingOctetMultiple;
-        int endOfRange = startOfRange + startingOctetMultiple - 1;
-
-        StringBuilder firstIPBuilder = new StringBuilder();
-        StringBuilder lastIPBuilder = new StringBuilder();
-
-        firstIPBuilder.append(prefixBuilder);
-        firstIPBuilder.append(startOfRange);
-        lastIPBuilder.append(prefixBuilder);
-        lastIPBuilder.append(endOfRange);
-
-        for (int i = 0; i < 3 - fixedOctet; i++) {
-            firstIPBuilder.append(".0");
-            lastIPBuilder.append(".255");
-        }
-
-        return firstIPBuilder + "-" + lastIPBuilder;
     }
 
     /**
@@ -546,38 +552,19 @@ public class Router {
     private void disaggregateAndWithdraw(Route route) {
         //Find the route that's actually in the table and remove it
         System.out.println("Disaggregating " + route);
-        Route aggregatedRoute = routesAggregated.get(route);
+        AggregatedRoute aggregatedRoute = routesAggregated.get(route);
         routingTable.remove(aggregatedRoute);
         System.out.println("Removing " + aggregatedRoute);
 
-        //Find the routes that were previously aggregated, remove the withdrawn route from the list and
-        // add the rest back to the table
-        List<Route> disaggregatedRoutes = aggregatedRoutes.get(aggregatedRoute);
-        System.out.println("Disaggregated routes: " + disaggregatedRoutes);
-        disaggregatedRoutes.remove(route);
-        routingTable.addAll(disaggregatedRoutes);
-        System.out.println("Adding " + disaggregatedRoutes);
+        List<Route> routesToAdd = aggregatedRoute.getRoutesInside();
+        routesToAdd.remove(route);
 
-        //If the other range contains it, we have to disaggregate it too.
-        String[] withdrawnRange = getIPRange(route).split("-");
-        BigInteger lowWithdrawnRange = toBigInt(withdrawnRange[0]);
-        BigInteger highWithdrawnRange = toBigInt(withdrawnRange[1]);
-        for (Route r : aggregatedRoutes.get(aggregatedRoute)) {
-            String[] addedBackRange = getIPRange(route).split("-");
-            BigInteger lowAddedBackRange = toBigInt(addedBackRange[0]);
-            BigInteger highAddedBackRange = toBigInt(addedBackRange[1]);
-
-            if (lowWithdrawnRange.compareTo(lowAddedBackRange) >= 0 && highWithdrawnRange.compareTo(highAddedBackRange) <= 0) {
-                //If the withdrawn range contains the added back range
-                disaggregateAndWithdraw(r);
-                break;
+        for (Route r : routesToAdd) {
+            routesAggregated.remove(r);
+            if (!checkAggregate(r)) {
+                routingTable.add(r);
             }
         }
-
-
-        //Remove the route from the maps
-        routesAggregated.remove(route);
-        aggregatedRoutes.remove(aggregatedRoute);
     }
 
     /**

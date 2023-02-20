@@ -5,13 +5,19 @@ import messages.UpdateMessage;
 import java.util.List;
 
 public class AggregatedRoute extends Route{
-    Route lowerRoute;
-    Route upperRoute;
+    List<Route> routesInside;
 
     public AggregatedRoute(String nextHop, String network, int netmask, int localpref, boolean selfOrigin, List<Integer> ASPath, UpdateMessage.UpdateParams.Origin origin,
-                           Route lowerRoute, Route upperRoute) {
+                           List<Route> routesInside) {
         super(nextHop, network, netmask, localpref, selfOrigin, ASPath, origin);
-        this.lowerRoute = lowerRoute;
-        this.upperRoute = upperRoute;
+        this.routesInside = routesInside;
+    }
+
+    public void includeRoute(Route route) {
+        routesInside.add(route);
+    }
+
+    public List<Route> getRoutesInside() {
+        return routesInside;
     }
 }

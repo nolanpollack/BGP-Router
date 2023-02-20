@@ -80,6 +80,10 @@ public class Route {
         return network + "/" + netmask;
     }
 
+    public int compareTo(Route other) {
+        return Integer.compare(Integer.parseInt(network.replace(".", "")), Integer.parseInt(other.network.replace(".", "")));
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == this) {
