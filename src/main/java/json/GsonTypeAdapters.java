@@ -2,6 +2,7 @@ package json;
 
 import com.google.gson.*;
 import messages.*;
+import remote.AggregatedRoute;
 import remote.Route;
 
 import java.lang.reflect.Type;
@@ -31,6 +32,7 @@ public class GsonTypeAdapters {
         public JsonElement serialize(Message message, Type type, JsonSerializationContext jsonSerializationContext) {
             GsonBuilder builder = new GsonBuilder();
             builder.registerTypeAdapter(Route.class, new RouteSerializer());
+            builder.registerTypeAdapter(AggregatedRoute.class, new RouteSerializer());
             Gson gson = builder.create();
             String json = gson.toJson(message);
             JsonObject jsonObject = gson.fromJson(json, JsonObject.class);

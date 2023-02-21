@@ -79,4 +79,18 @@ public class Route {
     public String toString() {
         return network + "/" + netmask;
     }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == this) {
+            return true;
+        }
+        if (!(o instanceof Route)) {
+            return false;
+        }
+        Route other = (Route) o;
+        return network.equals(other.network)
+                && netmask == other.netmask
+                && attributesEqual(other);
+    }
 }

@@ -201,35 +201,52 @@ public class Router {
         }
     }
 
+    /**
+     * Checks if a route can be aggregated with an existing route and does so if possible.
+     *
+     * @param newRoute
+     * @return
+     */
     private boolean checkAggregate(Route newRoute) {
-        String[] newRouteRange = getIPRange(newRoute).split("-");
-        BigInteger lowRange = toBigInt(newRouteRange[0]);
-        BigInteger highRange = toBigInt(newRouteRange[1]);
-
         for (Route route : routingTable) {
-            if (newRoute.attributesEqual(route)) {
-                String[] routeRange = getIPRange(route).split("-");
-                BigInteger existingRouteLow = toBigInt(routeRange[0]);
-                BigInteger existingRouteHigh = toBigInt(routeRange[1]);
-
-                boolean adjacent = existingRouteLow.equals(highRange.add(BigInteger.ONE))
-                        || existingRouteHigh.equals(lowRange.subtract(BigInteger.ONE));
-                boolean existingContainsNew = existingRouteLow.compareTo(lowRange) <= 0 && existingRouteHigh.compareTo(highRange) >= 0;
-                boolean newContainsExisting = lowRange.compareTo(existingRouteLow) <= 0 && highRange.compareTo(existingRouteHigh) >= 0;
-
-                if (adjacent || existingContainsNew || newContainsExisting) {
-                    aggregate(newRoute, route);
-                    return true;
-                }
+            if (routesCanBeAggregated(newRoute, route)) {
+                aggregate(newRoute, route);
+                return true;
             }
         }
 
         return false;
     }
 
+    private boolean routesCanBeAggregated(Route newRoute, Route existingRoute) {
+        String[] newRouteRange = getIPRange(newRoute).split("-");
+        BigInteger lowRange = toBigInt(newRouteRange[0]);
+        BigInteger highRange = toBigInt(newRouteRange[1]);
+
+        if (newRoute.attributesEqual(existingRoute)) {
+            String[] routeRange = getIPRange(existingRoute).split("-");
+            BigInteger existingRouteLow = toBigInt(routeRange[0]);
+            BigInteger existingRouteHigh = toBigInt(routeRange[1]);
+
+            boolean adjacent = existingRouteLow.equals(highRange.add(BigInteger.ONE))
+                    || existingRouteHigh.equals(lowRange.subtract(BigInteger.ONE));
+            boolean existingContainsNew = existingRouteLow.compareTo(lowRange) <= 0 && existingRouteHigh.compareTo(highRange) >= 0;
+            boolean newContainsExisting = lowRange.compareTo(existingRouteLow) <= 0 && highRange.compareTo(existingRouteHigh) >= 0;
+
+            return adjacent || existingContainsNew || newContainsExisting;
+        }
+        return false;
+    }
+
     private void aggregate(Route newRoute, Route existingRoute) {
+        AggregatedRoute aggregatedRoute = getAggregatedRoute(newRoute, existingRoute);
+
         routingTable.remove(existingRoute);
 
+        routingTable.add(aggregatedRoute);
+    }
+
+    private AggregatedRoute getAggregatedRoute(Route newRoute, Route existingRoute) {
         String newPrefix = toBinary(newRoute.network);
         String existingPrefix = toBinary(existingRoute.network);
 
@@ -246,35 +263,26 @@ public class Router {
 
         String aggregatedNetwork = toIP(binaryAnd(newPrefix, netmaskBinary));
 
-        Route aggregatedRoute = new Route(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin);
-        boolean aggregatedAlreadyExists = false;
+        AggregatedRoute aggregatedRoute = new AggregatedRoute(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin,
+                newRoute, existingRoute);
 
-        if (existingRoute.network.equals(aggregatedNetwork)
-                && existingRoute.netmask == aggregatedNetmask
-                && existingRoute.nextHop.equals(aggregatedRoute.nextHop)) {
-            aggregatedRoute = existingRoute;
-            aggregatedAlreadyExists = true;
-        }
+        System.out.println("Aggregated Route: " + aggregatedRoute + " from " + newRoute + " and " + existingRoute);
 
-        List<Route> routeCache;
-
-        if (aggregatedAlreadyExists) {
-            routeCache = aggregatedRoutes.get(aggregatedRoute);
-        } else {
-            routeCache = new ArrayList<>();
-            routingTable.add(aggregatedRoute);
-            routeCache.add(existingRoute);
-            routesAggregated.put(existingRoute, aggregatedRoute);
-        }
-
-        routeCache.add(newRoute);
-//        if(aggregatedRoutes.containsKey(aggregatedRoute)){
-//            routeCache.addAll(aggregatedRoutes.get(aggregatedRoute));
-//        }
-        aggregatedRoutes.put(aggregatedRoute, routeCache);
         routesAggregated.put(newRoute, aggregatedRoute);
+        routesAggregated.put(existingRoute, aggregatedRoute);
 
-        System.out.println("Aggregated " + routeCache + " into " + aggregatedRoute);
+        if (existingRoute instanceof AggregatedRoute) {
+            AggregatedRoute existingRouteAggregated = (AggregatedRoute) existingRoute;
+            if (routesCanBeAggregated(existingRouteAggregated.lowerRoute, newRoute)) {
+                aggregatedRoute.lowerRoute = getAggregatedRoute(newRoute, existingRouteAggregated.lowerRoute);
+            } else if (routesCanBeAggregated(existingRouteAggregated.upperRoute, newRoute)) {
+                aggregatedRoute.upperRoute = getAggregatedRoute(newRoute, existingRouteAggregated.upperRoute);
+            }
+        }
+
+
+
+        return aggregatedRoute;
     }
 
     /**
@@ -537,15 +545,18 @@ public class Router {
 
     private void disaggregateAndWithdraw(Route route) {
         //Find the route that's actually in the table and remove it
+        System.out.println("Disaggregating " + route);
         Route aggregatedRoute = routesAggregated.get(route);
         routingTable.remove(aggregatedRoute);
+        System.out.println("Removing " + aggregatedRoute);
 
         //Find the routes that were previously aggregated, remove the withdrawn route from the list and
         // add the rest back to the table
         List<Route> disaggregatedRoutes = aggregatedRoutes.get(aggregatedRoute);
+        System.out.println("Disaggregated routes: " + disaggregatedRoutes);
         disaggregatedRoutes.remove(route);
         routingTable.addAll(disaggregatedRoutes);
-        System.out.println("Removing " + aggregatedRoute + " and adding " + disaggregatedRoutes);
+        System.out.println("Adding " + disaggregatedRoutes);
 
         //If the other range contains it, we have to disaggregate it too.
         String[] withdrawnRange = getIPRange(route).split("-");
