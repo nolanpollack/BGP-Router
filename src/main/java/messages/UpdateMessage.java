@@ -3,15 +3,30 @@ package messages;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Represents an update message.
+ */
 public class UpdateMessage extends Message {
     public UpdateMessage(String src, String dst, PublicUpdateParams msg) {
         super(MessageType.update, src, dst, msg);
     }
 
+    /**
+     * Returns the parameters of this update message.
+     *
+     * @return the update parameters.
+     */
     public UpdateParams getUpdateParams() {
         return (UpdateParams) msg;
     }
 
+    /**
+     * Returns the parameters of this update message that would be sent to neighbors, i.e. the ASPath is truncated and
+     * some other fields aren't included.
+     *
+     * @param asn the ASN of the router sending the update (this router).
+     * @return the update parameters.
+     */
     public PublicUpdateParams getPublicUpdateParams(int asn) {
         PublicUpdateParams params = new PublicUpdateParams((UpdateParams) msg);
         params.ASPath.add(0, asn);
@@ -19,6 +34,9 @@ public class UpdateMessage extends Message {
         return params;
     }
 
+    /**
+     * Represents the parameters of an update message that would be sent to another router.
+     */
     public static class PublicUpdateParams {
         public String network;
         public String netmask;
@@ -37,6 +55,10 @@ public class UpdateMessage extends Message {
         }
     }
 
+    /**
+     * Represents the parameters of an update message that would be sent to this router. Contains all information
+     * about a Route.
+     */
     public static class UpdateParams extends PublicUpdateParams {
         public enum Origin {
             IGP,

@@ -1,5 +1,8 @@
 package messages;
 
+/**
+ * Represents a message to be sent or received from a neighboring router.
+ */
 public abstract class Message {
     public enum MessageType {
         handshake,

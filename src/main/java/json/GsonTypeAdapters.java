@@ -11,6 +11,9 @@ import java.lang.reflect.Type;
  * Contains type adapters for Gson to serialize and deserialize messages.
  */
 public class GsonTypeAdapters {
+    /**
+     * Serializes a Route to JSON.
+     */
     public static class RouteSerializer implements JsonSerializer<Route> {
         @Override
         public JsonElement serialize(Route route, Type type, JsonSerializationContext jsonSerializationContext) {
@@ -27,6 +30,9 @@ public class GsonTypeAdapters {
         }
     }
 
+    /**
+     * Serializes a Message to JSON.
+     */
     public static class MessageSerializer implements JsonSerializer<Message> {
         @Override
         public JsonElement serialize(Message message, Type type, JsonSerializationContext jsonSerializationContext) {
@@ -46,6 +52,9 @@ public class GsonTypeAdapters {
         }
     }
 
+    /**
+     * Deserializes an Update Message from JSON.
+     */
     public static class UpdateMessageDeserializer implements JsonDeserializer<UpdateMessage> {
         @Override
         public UpdateMessage deserialize(JsonElement jsonElement, Type type, JsonDeserializationContext jsonDeserializationContext) throws JsonParseException {
@@ -58,6 +67,9 @@ public class GsonTypeAdapters {
         }
     }
 
+    /**
+     * Deserializes a Withdraw Message from JSON.
+     */
     public static class WithdrawMessageDeserializer implements JsonDeserializer<WithdrawMessage> {
         @Override
         public WithdrawMessage deserialize(JsonElement jsonElement, Type type, JsonDeserializationContext jsonDeserializationContext) throws JsonParseException {
@@ -70,6 +82,9 @@ public class GsonTypeAdapters {
         }
     }
 
+    /**
+     * Deserializes a Message from JSON.
+     */
     public static class MessageDeserializer implements JsonDeserializer<Message> {
         @Override
         public Message deserialize(JsonElement jsonElement, Type type, JsonDeserializationContext jsonDeserializationContext) throws JsonParseException {

@@ -67,6 +67,12 @@ public class Route {
         return ipBuilder.toString();
     }
 
+    /**
+     * Returns true if the attributes of the two routes are equal.
+     *
+     * @param other the other route to compare to.
+     * @return true if the attributes of the two routes are equal.
+     */
     public boolean attributesEqual(Route other) {
         return nextHop.equals(other.nextHop)
                 && localpref == other.localpref
@@ -78,10 +84,6 @@ public class Route {
     @Override
     public String toString() {
         return network + "/" + netmask;
-    }
-
-    public int compareTo(Route other) {
-        return Integer.compare(Integer.parseInt(network.replace(".", "")), Integer.parseInt(other.network.replace(".", "")));
     }
 
     @Override

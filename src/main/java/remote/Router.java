@@ -37,9 +37,9 @@ public class Router {
      * @param connections List of connections in the form of "port-neighbor-relation"
      */
     public Router(int asn, String[] connections) throws Exception {
-        gson = initGson();
-
         System.out.println("Router at AS " + asn + " starting up");
+
+        gson = initGson();
         this.asn = asn;
 
         for (String relationship : connections) {
@@ -48,15 +48,13 @@ public class Router {
             String neighbor = parts[1];
             String relation = parts[2];
 
-            //Create sockets and bind to an address and ephemeral port
-            DatagramChannel channel = DatagramChannel.open();
-            DatagramSocket socket = channel.socket();
-            socket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+            DatagramSocket socket = createSocket();
 
             sockets.put(neighbor, socket);
             ports.put(neighbor, Integer.parseInt(port));
             relations.put(neighbor, relation);
 
+            //Send Handshake Message
             String message = gson.toJson(new HandshakeMessage(ourAddr(neighbor), neighbor));
             send(neighbor, message);
         }
@@ -80,6 +78,20 @@ public class Router {
     }
 
     /**
+     * Create a socket and bind it to an address and ephemeral port.
+     *
+     * @return DatagramSocket
+     * @throws IOException If the socket could not be created.
+     */
+    private DatagramSocket createSocket() throws IOException {
+        DatagramChannel channel = DatagramChannel.open();
+        DatagramSocket socket = channel.socket();
+        socket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+
+        return socket;
+    }
+
+    /**
      * Return the address of this router based on the address of a neighbor.
      *
      * @param dst Address of the neighbor.
@@ -99,7 +111,6 @@ public class Router {
      * @throws Exception If the message could not be sent.
      */
     public void send(String network, String message) throws Exception {
-//        System.out.println("Sending message '" + message + "' to " + network);
         byte[] buffer = message.getBytes(StandardCharsets.UTF_8);
         ByteBuffer byteBuffer = ByteBuffer.wrap(buffer);
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), ports.get(network));
@@ -112,29 +123,50 @@ public class Router {
      * @throws Exception If the router could not be started.
      */
     public void run() throws Exception {
+        try (Selector selector = initializeSelector()) {
+            while (true) {
+                selectReadyChannels(selector);
+            }
+        }
+    }
+
+    /**
+     * Initialize the selector by registering all sockets to it in read mode and setting them to non-blocking.
+     *
+     * @return Selector
+     * @throws IOException If the selector could not be initialized.
+     */
+    private Selector initializeSelector() throws IOException {
         Selector selector = Selector.open();
         for (String neighbor : sockets.keySet()) {
             DatagramSocket socket = sockets.get(neighbor);
             socket.getChannel().configureBlocking(false);
             socket.getChannel().register(selector, SelectionKey.OP_READ, neighbor);
         }
+        return selector;
+    }
 
-        while (true) {
-            int readyChannels = selector.select();
-            if (readyChannels == 0) {
-                continue;
-            }
-            Set<SelectionKey> keys = selector.selectedKeys();
-            Iterator<SelectionKey> keyIterator = keys.iterator();
+    /**
+     * Selects all ready channels, and iterates through them, then handles received messages.
+     *
+     * @param selector Selector to select from.
+     * @throws Exception If a channel could not be handled.
+     */
+    private void selectReadyChannels(Selector selector) throws Exception {
+        int readyChannels = selector.select();
+        if (readyChannels == 0) {
+            return;
+        }
+        Set<SelectionKey> keys = selector.selectedKeys();
+        Iterator<SelectionKey> keyIterator = keys.iterator();
 
-            while (keyIterator.hasNext()) {
-                SelectionKey key = keyIterator.next();
-                if (key.isReadable()) {
-                    String msg = readMessage(key);
-                    handleMessage(msg);
-                }
-                keyIterator.remove();
+        while (keyIterator.hasNext()) {
+            SelectionKey key = keyIterator.next();
+            if (key.isReadable()) {
+                String msg = readMessage(key);
+                handleMessage(msg);
             }
+            keyIterator.remove();
         }
     }
 
@@ -177,11 +209,17 @@ public class Router {
         }
     }
 
+    /**
+     * Forwards a message to the appropriate neighbors depending on where the message came from and the
+     * relationship of the neighbor.
+     *
+     * @param message message to send to neighbors.
+     */
     private void updateAppropriate(Message message) throws Exception {
         if (relations.get(message.src).equals("cust")) {
-            broadcastUpdate(message);
+            broadcastAnnouncement(message);
         } else {
-            updateCustomers(message);
+            announceToCustomers(message);
         }
     }
 
@@ -196,15 +234,14 @@ public class Router {
 
         if (!checkAggregate(newRoute)) {
             routingTable.add(newRoute);
-            System.out.println("Adding route " + newRoute + " to routing table");
         }
     }
 
     /**
      * Checks if a route can be aggregated with an existing route and does so if possible.
      *
-     * @param newRoute
-     * @return
+     * @param newRoute route to aggregate into the routing table.
+     * @return true if route was aggregated, false if not.
      */
     private boolean checkAggregate(Route newRoute) {
         for (Route route : routingTable) {
@@ -217,12 +254,21 @@ public class Router {
         return false;
     }
 
+    /**
+     * Returns whether a route can be aggregated with an existing route in the table.
+     *
+     * @param newRoute      route being added.
+     * @param existingRoute route already in table.
+     * @return true if routes can be aggregated, false if not.
+     */
     private boolean routesCanBeAggregated(Route newRoute, Route existingRoute) {
-        String[] newRouteRange = getIPRange(newRoute).split("-");
-        BigInteger lowRange = toBigInt(newRouteRange[0]);
-        BigInteger highRange = toBigInt(newRouteRange[1]);
-
         if (newRoute.attributesEqual(existingRoute)) {
+            //Get the low and high range of the new route.
+            String[] newRouteRange = getIPRange(newRoute).split("-");
+            BigInteger lowRange = toBigInt(newRouteRange[0]);
+            BigInteger highRange = toBigInt(newRouteRange[1]);
+
+            //Get the low and high range of the existing route.
             String[] routeRange = getIPRange(existingRoute).split("-");
             BigInteger existingRouteLow = toBigInt(routeRange[0]);
             BigInteger existingRouteHigh = toBigInt(routeRange[1]);
@@ -237,14 +283,26 @@ public class Router {
         return false;
     }
 
+    /**
+     * Aggregates two routes.
+     *
+     * @param newRoute      route being added.
+     * @param existingRoute route originally in table.
+     */
     private void aggregate(Route newRoute, Route existingRoute) {
         AggregatedRoute aggregatedRoute = getAggregatedRoute(newRoute, existingRoute);
 
         routingTable.remove(existingRoute);
-
         routingTable.add(aggregatedRoute);
     }
 
+    /**
+     * Gets a Route representation of the aggregation between two routes.
+     *
+     * @param newRoute      route being added to table.
+     * @param existingRoute route already in table.
+     * @return an AggregatedRoute, containing a list of all routes that have been aggregated to make it.
+     */
     private AggregatedRoute getAggregatedRoute(Route newRoute, Route existingRoute) {
         String newPrefix = toBinary(newRoute.network);
         String existingPrefix = toBinary(existingRoute.network);
@@ -273,13 +331,13 @@ public class Router {
         AggregatedRoute aggregatedRoute = new AggregatedRoute(newRoute.nextHop, aggregatedNetwork, aggregatedNetmask, newRoute.localpref, newRoute.selfOrigin, newRoute.ASPath, newRoute.origin,
                 routesInside);
 
+        //If the two routes are already aggregated, add the new route to the existing AggregatedRoute.
         if (existingRoute.equals(aggregatedRoute)) {
+            assert existingRoute instanceof AggregatedRoute;
             AggregatedRoute existingAggregatedRoute = (AggregatedRoute) existingRoute;
             existingAggregatedRoute.includeRoute(newRoute);
-            System.out.println("Aggregated Route: " + existingRoute + " from " + existingAggregatedRoute.getRoutesInside());
             routesAggregated.put(newRoute, existingAggregatedRoute);
         } else {
-            System.out.println("Aggregated Route: " + aggregatedRoute + " from " + routesInside);
             routesAggregated.put(newRoute, aggregatedRoute);
             routesAggregated.put(existingRoute, aggregatedRoute);
         }
@@ -306,6 +364,12 @@ public class Router {
         return result.toString();
     }
 
+    /**
+     * Gets the IP subnet range of a route.
+     *
+     * @param route route to get range of.
+     * @return a string containing the two edges of the range split by a hyphen.
+     */
     private String getIPRange(Route route) {
         if (route.netmask == 0) {
             return "0.0.0.0-0.0.0.0";
@@ -358,41 +422,40 @@ public class Router {
     }
 
     /**
-     * Broadcasts an update message to all neighbors.
+     * Broadcasts an update or withdraw message to all neighbors.
      *
      * @param message Message to broadcast.
-     * @throws Exception
      */
-    private void broadcastUpdate(Message message) throws Exception {
+    private void broadcastAnnouncement(Message message) throws Exception {
         for (String neighbor : ports.keySet()) {
             if (!neighbor.equals(message.src)) {
-                sendUpdate(neighbor, message);
+                forwardAnnouncement(neighbor, message);
             }
         }
     }
 
     /**
-     * Sends an update message to all customers.
+     * Sends an update or withdraw message to all customers.
      *
      * @param message Message to send.
      * @throws Exception If the message could not be sent.
      */
-    private void updateCustomers(Message message) throws Exception {
+    private void announceToCustomers(Message message) throws Exception {
         for (String neighbor : ports.keySet()) {
             if (!neighbor.equals(message.src) && relations.get(neighbor).equals("cust")) {
-                sendUpdate(neighbor, message);
+                forwardAnnouncement(neighbor, message);
             }
         }
     }
 
     /**
-     * Sends an update message to a specific destination.
+     * Sends an update or withdraw message to a specific destination.
      *
      * @param destination Destination to send the message to.
      * @param message     Message to send.
      * @throws Exception If the message could not be sent.
      */
-    private void sendUpdate(String destination, Message message) throws Exception {
+    private void forwardAnnouncement(String destination, Message message) throws Exception {
         Message update;
         if (message instanceof UpdateMessage) {
             update = new UpdateMessage(ourAddr(destination), destination, ((UpdateMessage) message).getPublicUpdateParams(asn));
@@ -531,8 +594,15 @@ public class Router {
         send(message.src, gson.toJson(new TableMessage(ourAddr(message.src), message.src, routingTable)));
     }
 
+    /**
+     * Withdraws all networks listed in a withdrawal message.
+     *
+     * @param message The withdrawal message to handle.
+     * @throws Exception If the message could not be sent.
+     */
     private void handleWithdraw(WithdrawMessage message) throws Exception {
         for (WithdrawMessage.WithdrawNetwork withdrawNetwork : message.getWithdrawNetworks()) {
+            //Check all the routes that have been aggregated.
             for (Route route : routesAggregated.keySet()) {
                 if (route.network.equals(withdrawNetwork.network)
                         && route.getNetmask().equals(withdrawNetwork.netmask)
@@ -549,13 +619,17 @@ public class Router {
         updateAppropriate(message);
     }
 
+    /**
+     * Withdraws a route that has been previously aggregated.
+     *
+     * @param route The route to withdraw.
+     */
     private void disaggregateAndWithdraw(Route route) {
         //Find the route that's actually in the table and remove it
-        System.out.println("Disaggregating " + route);
         AggregatedRoute aggregatedRoute = routesAggregated.get(route);
         routingTable.remove(aggregatedRoute);
-        System.out.println("Removing " + aggregatedRoute);
 
+        //Add the disaggregated routes back to the table
         List<Route> routesToAdd = aggregatedRoute.getRoutesInside();
         routesToAdd.remove(route);
 
@@ -578,12 +652,10 @@ public class Router {
         // Read the incoming data
         ByteBuffer buffer = ByteBuffer.allocate(65535);
         DatagramChannel channel = (DatagramChannel) key.channel();
-        InetSocketAddress source = (InetSocketAddress) channel.receive(buffer);
+        channel.receive(buffer);
 
         buffer.flip();
-        String msg = new String(buffer.array(), 0, buffer.limit());
-//        System.out.println("Received message '" + msg + "' from " + source);
-        return msg;
+        return new String(buffer.array(), 0, buffer.limit());
     }
 
     /**
@@ -594,7 +666,7 @@ public class Router {
      */
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.out.println("Usage: java Router <asn> <connections>");
+            System.out.println("Usage: ./3700router <asn> <connections>");
             System.exit(1);
         }
 

@@ -1,13 +1,19 @@
 package messages;
 
-import java.util.List;
-
-public class WithdrawMessage extends Message{
+/**
+ * Represents a withdrawal message.
+ */
+public class WithdrawMessage extends Message {
 
     public WithdrawMessage(String src, String dst, WithdrawNetwork[] msg) {
         super(MessageType.withdraw, src, dst, msg);
     }
 
+    /**
+     * Returns the networks this message indicates to withdraw.
+     *
+     * @return the networks this message indicates to withdraw.
+     */
     public WithdrawNetwork[] getWithdrawNetworks() {
         return (WithdrawNetwork[]) msg;
     }
